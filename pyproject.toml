@@ -29,6 +29,7 @@ dev = [
     "pytest-cookies>=0.7.0",
     "pytest-cov>=7.1.0",
     "cruft[pyproject]>=2.16.0",# Automated Cookiecutter template synchronization
+    "ruff>=0.16.4",
 ]
 
 #
