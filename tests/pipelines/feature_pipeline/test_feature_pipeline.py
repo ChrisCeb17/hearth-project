@@ -8,6 +8,7 @@ import pandas as pd
 import pytest
 
 from pipelines.feature_pipeline.feature_pipeline import (
+    DataValidationError,
     build_features,
     clean_boolean_columns,
     clean_ca,
@@ -15,7 +16,9 @@ from pipelines.feature_pipeline.feature_pipeline import (
     clean_slope,
     clean_target,
     load_raw_data,
+    run_pipeline,
     save_features,
+    validate_features,
 )
 
 
@@ -150,6 +153,53 @@ class TestBuildFeatures:
         assert result["disease"].isna().sum() == 0
 
 
+@pytest.fixture
+def valid_features_df() -> pd.DataFrame:
+    return pd.DataFrame(
+        {
+            "age": [63, 41],
+            "sex": ["Male", "Female"],
+            "chest_pain": ["typical", "nontypical"],
+            "rest_bp": [145, 130],
+            "chol": [233, 204],
+            "fbs": [1.0, 0.0],
+            "rest_ecg": ["normal", "ST-T wave abnormality"],
+            "max_hr": [150, 172],
+            "exang": [0.0, 1.0],
+            "old_peak": [2.3, 1.4],
+            "slope": [3.0, 1.0],
+            "ca": [0.0, 1.0],
+            "thal": ["fixed", "normal"],
+            "disease": [0, 1],
+        }
+    )
+
+
+class TestValidateFeatures:
+    def test_dataset_valido_no_falla(self, valid_features_df: pd.DataFrame) -> None:
+        validate_features(valid_features_df)
+
+    def test_falla_si_hay_categoria_invalida(self, valid_features_df: pd.DataFrame) -> None:
+        invalid_df = valid_features_df.copy()
+        invalid_df.loc[0, "sex"] = "Otro"
+
+        with pytest.raises(DataValidationError, match="categorías inválidas"):
+            validate_features(invalid_df)
+
+    def test_falla_si_hay_nulos_sobre_umbral(self, valid_features_df: pd.DataFrame) -> None:
+        invalid_df = valid_features_df.copy()
+        invalid_df.loc[0, "thal"] = None
+
+        with pytest.raises(DataValidationError, match="excede nulos"):
+            validate_features(invalid_df)
+
+    def test_falla_si_hay_duplicados_en_llave(self, valid_features_df: pd.DataFrame) -> None:
+        invalid_df = pd.concat([valid_features_df, valid_features_df.iloc[[0]]], ignore_index=True)
+
+        with pytest.raises(DataValidationError, match="registros duplicados"):
+            validate_features(invalid_df)
+
+
 class TestLoadRawData:
     def test_lee_csv_correctamente(self, tmp_path: Path) -> None:
         csv_path = tmp_path / "test_data.csv"
@@ -183,3 +233,34 @@ class TestSaveFeatures:
         save_features(df, output_path)
 
         assert output_path.parent.exists()
+
+
+class TestRunPipeline:
+    def test_no_persiste_si_falla_validacion(self, tmp_path: Path) -> None:
+        input_path = tmp_path / "invalid.csv"
+        output_path = tmp_path / "out" / "features.parquet"
+
+        df = pd.DataFrame(
+            {
+                "age": [250],
+                "sex": ["Male"],
+                "chest_pain": ["typical"],
+                "rest_bp": [145],
+                "chol": [233],
+                "fbs": [1],
+                "rest_ecg": ["normal"],
+                "max_hr": [150],
+                "exang": [0],
+                "old_peak": [2.3],
+                "slope": [3],
+                "ca": [0],
+                "thal": ["fixed"],
+                "disease": [0],
+            }
+        )
+        df.to_csv(input_path, index=False)
+
+        with pytest.raises(DataValidationError, match="Validación de features fallida"):
+            run_pipeline(input_path, output_path)
+
+        assert not output_path.exists()

@@ -18,6 +18,7 @@ import logging
 from pathlib import Path
 
 import pandas as pd
+from pandas.api.types import is_numeric_dtype
 
 logger = logging.getLogger(__name__)
 
@@ -36,9 +37,67 @@ VALID_CATEGORIES: dict[str, list[str]] = {
 VALID_SLOPE = [1.0, 2.0, 3.0]
 VALID_CA = [0.0, 1.0, 2.0, 3.0]
 VALID_BOOLEAN = [0.0, 1.0]
+EXPECTED_COLUMNS = {
+    "age",
+    "sex",
+    "chest_pain",
+    "rest_bp",
+    "chol",
+    "fbs",
+    "rest_ecg",
+    "max_hr",
+    "exang",
+    "old_peak",
+    "slope",
+    "ca",
+    "thal",
+    "disease",
+}
+NUMERIC_RANGES: dict[str, tuple[float, float]] = {
+    "age": (0, 120),
+    "rest_bp": (50, 250),
+    "chol": (50, 700),
+    "max_hr": (50, 250),
+    "old_peak": (0, 10),
+}
+MAX_NULL_PERCENT: dict[str, float] = {
+    "age": 0.0,
+    "sex": 0.0,
+    "chest_pain": 0.0,
+    "rest_ecg": 0.0,
+    "thal": 0.0,
+    "disease": 0.0,
+    "rest_bp": 0.0,
+    "chol": 0.0,
+    "max_hr": 0.0,
+    "old_peak": 0.0,
+    "slope": 0.05,
+    "ca": 0.1,
+    "fbs": 0.05,
+    "exang": 0.05,
+}
+KEY_COLUMNS = [
+    "age",
+    "sex",
+    "chest_pain",
+    "rest_bp",
+    "chol",
+    "max_hr",
+    "old_peak",
+    "slope",
+    "ca",
+    "thal",
+    "fbs",
+    "exang",
+    "disease",
+]
 
 DEFAULT_INPUT_PATH = Path("data/01_raw/corazon.csv")
 DEFAULT_OUTPUT_PATH = Path("data/02_intermediate/corazon_type_fixed.parquet")
+
+
+class DataValidationError(ValueError):
+    """Error de validación de datos previo al guardado de features."""
 
 
 # ------------------------------------------------------------------
@@ -236,6 +295,69 @@ def save_features(df: pd.DataFrame, output_path: Path) -> None:
     logger.info("Features guardadas en %s (%s filas)", output_path, len(df))
 
 
+def validate_features(df: pd.DataFrame) -> None:
+    """Valida calidad e integridad del dataset antes de persistir.
+
+    Incluye reglas de:
+      - estructura/tipos esperados;
+      - rangos numéricos y dominios permitidos;
+      - porcentaje máximo de nulos;
+      - unicidad de registros clave.
+    """
+    errors: list[str] = []
+
+    missing_columns = sorted(EXPECTED_COLUMNS.difference(df.columns))
+    if missing_columns:
+        errors.append(f"Columnas faltantes requeridas: {missing_columns}")
+
+    if df.empty:
+        errors.append("El dataset de features está vacío después de la limpieza")
+
+    for col, max_null in MAX_NULL_PERCENT.items():
+        if col not in df.columns:
+            continue
+        null_pct = float(df[col].isna().mean())
+        if null_pct > max_null:
+            errors.append(
+                f"Columna '{col}' excede nulos: {null_pct:.2%} > {max_null:.2%}"
+            )
+
+    for col, (min_v, max_v) in NUMERIC_RANGES.items():
+        if col not in df.columns:
+            continue
+        if not is_numeric_dtype(df[col]):
+            errors.append(f"Columna '{col}' debe ser numérica")
+            continue
+        out_of_range = (~df[col].between(min_v, max_v)) & df[col].notna()
+        if out_of_range.any():
+            errors.append(
+                f"Columna '{col}' contiene valores fuera de rango [{min_v}, {max_v}]"
+            )
+
+    for col, valid_values in VALID_CATEGORIES.items():
+        if col not in df.columns:
+            continue
+        invalid_mask = ~df[col].astype(str).isin(valid_values) & df[col].notna()
+        if invalid_mask.any():
+            errors.append(f"Columna '{col}' contiene categorías inválidas")
+
+    if "disease" in df.columns and not set(df["disease"].dropna().unique()).issubset({0, 1}):
+        errors.append("Columna 'disease' debe contener únicamente valores {0, 1}")
+
+    for col, valid_values in {"slope": VALID_SLOPE, "ca": VALID_CA, "fbs": VALID_BOOLEAN, "exang": VALID_BOOLEAN}.items():
+        if col not in df.columns:
+            continue
+        invalid_mask = ~df[col].isin(valid_values) & df[col].notna()
+        if invalid_mask.any():
+            errors.append(f"Columna '{col}' contiene valores inválidos")
+
+    if set(KEY_COLUMNS).issubset(df.columns) and df.duplicated(subset=KEY_COLUMNS).any():
+        errors.append("Se encontraron registros duplicados en las columnas clave")
+
+    if errors:
+        raise DataValidationError("Validación de features fallida: " + " | ".join(errors))
+
+
 # ------------------------------------------------------------------
 # Orquestación / CLI
 # ------------------------------------------------------------------
@@ -251,6 +373,7 @@ def run_pipeline(input_path: Path, output_path: Path) -> pd.DataFrame:
     """
     df_raw = load_raw_data(input_path)
     df_features = build_features(df_raw)
+    validate_features(df_features)
     save_features(df_features, output_path)
     return df_features
 
