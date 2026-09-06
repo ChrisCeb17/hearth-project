@@ -404,7 +404,7 @@ def validate_features(df: pd.DataFrame) -> pd.DataFrame:
     try:
         df_validado = schema.validate(df, lazy=True)
     except pa.errors.SchemaErrors as exc:
-        logger.error(
+        logger.exception(
             "Validación de datos FALLIDA. Detalle de casos de fallo:\n%s",
             exc.failure_cases.to_string(),
         )
@@ -503,8 +503,8 @@ def main() -> None:
     )
     try:
         run_pipeline(args.input, args.output)
-    except DataValidationError as exc:
-        logger.error("Pipeline detenido: %s", exc)
+    except DataValidationError:
+        logger.exception("Pipeline detenido")
         sys.exit(1)
 
 
