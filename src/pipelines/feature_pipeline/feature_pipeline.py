@@ -79,7 +79,9 @@ def clean_target(df: pd.DataFrame, target: str = TARGET) -> pd.DataFrame:
     df = df[df[target].isin([True, False, 0, 1, "0", "1"])]
 
     n_eliminadas = n_antes - len(df)
-    logger.info("Target '%s': %s filas eliminadas (nulos o valores inválidos)", target, n_eliminadas)
+    logger.info(
+        "Target '%s': %s filas eliminadas (nulos o valores inválidos)", target, n_eliminadas
+    )
 
     df[target] = df[target].astype(int)
     return df

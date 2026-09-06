@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pandas as pd
 import pytest
+
 from pipelines.feature_pipeline.feature_pipeline import (
     build_features,
     clean_boolean_columns,
@@ -122,9 +123,7 @@ class TestCleanBooleanColumns:
 
 
 class TestBuildFeatures:
-    def test_pipeline_completo_elimina_filas_invalidas(
-        self, raw_df: pd.DataFrame
-    ) -> None:
+    def test_pipeline_completo_elimina_filas_invalidas(self, raw_df: pd.DataFrame) -> None:
         result = build_features(raw_df)
         assert len(result) < len(raw_df)
         assert result["disease"].isna().sum() == 0
