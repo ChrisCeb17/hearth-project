@@ -19,11 +19,15 @@ st.set_page_config(
     layout="centered",
 )
 
-MODEL_PATH = Path(__file__).resolve().parents[1] / "models" / "corazon_classification-random_forest-v1.joblib"
+MODEL_PATH = (
+    Path(__file__).resolve().parents[1]
+    / "models"
+    / "corazon_classification-random_forest-v1.joblib"
+)
 
 
 @st.cache_resource
-def load_model():
+def load_model() -> object:
     """Carga el pipeline entrenado (preprocesamiento + modelo) una sola vez."""
     return load(MODEL_PATH)
 
@@ -66,9 +70,7 @@ with st.form("formulario_paciente"):
         rest_bp = st.number_input(
             "Presión arterial en reposo (mm Hg)", min_value=60, max_value=250, value=120
         )
-        chol = st.number_input(
-            "Colesterol sérico (mg/dl)", min_value=100, max_value=600, value=200
-        )
+        chol = st.number_input("Colesterol sérico (mg/dl)", min_value=100, max_value=600, value=200)
         fbs = st.selectbox(
             "Azúcar en sangre en ayunas > 120 mg/dl",
             options=["No", "Sí"],
@@ -142,14 +144,18 @@ if submitted:
     st.subheader("Resultado")
 
     if prediccion == 1:
-        st.error(f"⚠️ **Riesgo de enfermedad cardíaca detectado** (probabilidad: {probabilidad:.1%})")
+        st.error(
+            f"⚠️ **Riesgo de enfermedad cardíaca detectado** (probabilidad: {probabilidad:.1%})"
+        )
         st.markdown(
             "El modelo sugiere que este paciente **podría tener enfermedad cardíaca**. "
             "Se recomienda evaluación médica adicional."
         )
     else:
         st.success(f"✅ **Bajo riesgo de enfermedad cardíaca** (probabilidad: {probabilidad:.1%})")
-        st.markdown("El modelo sugiere que este paciente **probablemente no tiene enfermedad cardíaca**.")
+        st.markdown(
+            "El modelo sugiere que este paciente **probablemente no tiene enfermedad cardíaca**."
+        )
 
     st.progress(float(probabilidad))
 

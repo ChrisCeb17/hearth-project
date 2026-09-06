@@ -1,0 +1,56 @@
+check yaml...............................................................Passed
+check for case conflicts.................................................Passed
+debug statements (python)................................................Passed
+detect private key.......................................................Passed
+check for merge conflicts................................................Passed
+check for added large files..............................................Passed
+ruff check...............................................................Failed
+- hook id: ruff-check
+- exit code: 1
+
+B905 `zip()` without an explicit `strict=` parameter
+ --> notebooks/5-models/5modelobase_cdcv_20260825.ipynb:cell 23:3:38
+  |
+1 | # Boxplot comparativo de las métricas de validación cruzada
+2 | fig, axes = plt.subplots(1, 2, figsize=(14, 5), sharey=True)
+3 | for ax, (nombre_modelo, metricas) in zip(axes, resultados_cv.items()):
+  |                                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+4 |     pd.DataFrame(metricas).plot.box(ax=ax, title=f"Cross Validation - {nombre_modelo}")
+5 |     ax.set_ylabel("Score")
+  |
+help: Add explicit value for parameter `strict=`
+
+PLR0913 Too many arguments in function definition (6 > 5)
+  --> notebooks/6-interpretation/6modelselection_cdcv_20260825.ipynb:cell 15:11:5
+   |
+11 | def build_model(classifier, preprocessor: ColumnTransformer, x_tr, y_tr, x_te, y_te) -> dict:
+   |     ^^^^^^^^^^^
+12 |     """Entrena un modelo dentro de un pipeline y calcula métricas en train y test."""
+13 |     pipe = Pipeline(steps=[("preprocessor", preprocessor), ("model", classifier)])
+   |
+
+PLR0917 Too many positional arguments (6 > 5)
+  --> notebooks/6-interpretation/6modelselection_cdcv_20260825.ipynb:cell 15:11:5
+   |
+11 | def build_model(classifier, preprocessor: ColumnTransformer, x_tr, y_tr, x_te, y_te) -> dict:
+   |     ^^^^^^^^^^^
+12 |     """Entrena un modelo dentro de un pipeline y calcula métricas en train y test."""
+13 |     pipe = Pipeline(steps=[("preprocessor", preprocessor), ("model", classifier)])
+   |
+
+Found 3 errors.
+No fixes available (1 hidden fix can be enabled with the `--unsafe-fixes` option).
+
+ruff format..............................................................Passed
+mypy.....................................................................Failed
+- hook id: mypy
+- exit code: 2
+
+notebooks/8-reports/streamlit_app.py: error: Duplicate module named "streamlit_app" (also at "app/streamlit_app.py")
+notebooks/8-reports/streamlit_app.py: note: See https://mypy.readthedocs.io/en/stable/running_mypy.html#mapping-file-paths-to-modules for more info
+notebooks/8-reports/streamlit_app.py: note: Common resolutions include:
+notebooks/8-reports/streamlit_app.py: note:     a) using `--exclude` to avoid checking one of them,
+notebooks/8-reports/streamlit_app.py: note:     b) adding `__init__.py` somewhere,
+notebooks/8-reports/streamlit_app.py: note:     c) using `--explicit-package-bases` or adjusting `MYPYPATH`
+Found 1 error in 1 file (errors prevented further checking)
+
