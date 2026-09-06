@@ -8,6 +8,7 @@ import pandas as pd
 import pytest
 
 from pipelines.feature_pipeline.feature_pipeline import (
+    DataValidationError,
     build_features,
     clean_boolean_columns,
     clean_ca,
@@ -15,24 +16,20 @@ from pipelines.feature_pipeline.feature_pipeline import (
     clean_slope,
     clean_target,
     load_raw_data,
+    run_pipeline,
     save_features,
+    validate_features,
 )
 
 
 @pytest.fixture
 def raw_df() -> pd.DataFrame:
-    """DataFrame de ejemplo que imitando el dataset corazon.csv, incluyendo ruido."""
+    """DataFrame de ejemplo que imita el dataset corazon.csv, incluyendo ruido."""
     return pd.DataFrame(
         {
             "age": [63, 45, 52, 41, 60],
             "sex": ["Male", "Female", "Male", "Female", "invalido"],
-            "chest_pain": [
-                "typical",
-                "asymptomatic",
-                "nonanginal",
-                "nontypical",
-                "typical",
-            ],
+            "chest_pain": ["typical", "asymptomatic", "nonanginal", "nontypical", "typical"],
             "rest_bp": [145, 130, 120, 110, 140],
             "chol": [233, 204, 199, 250, 300],
             "fbs": [1, 0, "0", "no_valido", 1],
@@ -48,6 +45,39 @@ def raw_df() -> pd.DataFrame:
     )
 
 
+@pytest.fixture
+def valid_features_df() -> pd.DataFrame:
+    """DataFrame de features ya limpio y que cumple TODAS las reglas de validación."""
+    return pd.DataFrame(
+        {
+            "age": [63.0, 45.0, 52.0, 41.0, 60.0],
+            "sex": ["Male", "Female", "Male", "Female", "Male"],
+            "chest_pain": ["typical", "asymptomatic", "nonanginal", "nontypical", "typical"],
+            "rest_bp": [145.0, 130.0, 120.0, 110.0, 140.0],
+            "chol": [233.0, 204.0, 199.0, 250.0, 300.0],
+            "fbs": [1.0, 0.0, 0.0, 0.0, 1.0],
+            "rest_ecg": [
+                "normal",
+                "ST-T wave abnormality",
+                "normal",
+                "normal",
+                "left ventricular hypertrophy",
+            ],
+            # max_hr respeta 220 - age + 15 (tolerancia) para cada fila
+            "max_hr": [150.0, 172.0, 168.0, 180.0, 140.0],
+            "exang": [0.0, 0.0, 1.0, 1.0, 0.0],
+            "old_peak": [2.3, 1.4, 0.0, 0.5, 1.2],
+            "slope": [1.0, 2.0, 3.0, 2.0, 2.0],
+            "ca": [0.0, 1.0, 2.0, 2.0, 0.0],
+            "thal": ["fixed", "normal", "reversable", "normal", "fixed"],
+            "disease": [1, 0, 0, 1, 0],
+        }
+    )
+
+
+# ------------------------------------------------------------------
+# Limpieza (funciones ya existentes)
+# ------------------------------------------------------------------
 class TestCleanTarget:
     def test_elimina_nulos(self, raw_df: pd.DataFrame) -> None:
         result = clean_target(raw_df)
@@ -183,3 +213,147 @@ class TestSaveFeatures:
         save_features(df, output_path)
 
         assert output_path.parent.exists()
+
+
+# ------------------------------------------------------------------
+# Validación de calidad, consistencia, formato e integridad
+# ------------------------------------------------------------------
+class TestValidateFeaturesCasosValidos:
+    def test_datos_validos_pasan_sin_error(self, valid_features_df: pd.DataFrame) -> None:
+        resultado = validate_features(valid_features_df)
+        assert len(resultado) == len(valid_features_df)
+
+    def test_datos_validos_conservan_columnas(self, valid_features_df: pd.DataFrame) -> None:
+        resultado = validate_features(valid_features_df)
+        assert set(resultado.columns) == set(valid_features_df.columns)
+
+
+class TestValidateFeaturesTipoYRango:
+    def test_edad_fuera_de_rango_falla(self, valid_features_df: pd.DataFrame) -> None:
+        df = valid_features_df.copy()
+        df.loc[0, "age"] = 200.0
+        with pytest.raises(DataValidationError):
+            validate_features(df)
+
+    def test_edad_negativa_falla(self, valid_features_df: pd.DataFrame) -> None:
+        df = valid_features_df.copy()
+        df.loc[0, "age"] = -5.0
+        with pytest.raises(DataValidationError):
+            validate_features(df)
+
+    def test_colesterol_fuera_de_rango_falla(self, valid_features_df: pd.DataFrame) -> None:
+        df = valid_features_df.copy()
+        df.loc[0, "chol"] = 5000.0
+        with pytest.raises(DataValidationError):
+            validate_features(df)
+
+    def test_valor_no_numerico_en_columna_numerica_falla(
+        self, valid_features_df: pd.DataFrame
+    ) -> None:
+        df = valid_features_df.copy()
+        df["age"] = df["age"].astype(object)
+        df.loc[0, "age"] = "no_es_numero"
+        with pytest.raises(DataValidationError):
+            validate_features(df)
+
+
+class TestValidateFeaturesCategorias:
+    def test_categoria_invalida_en_sex_falla(self, valid_features_df: pd.DataFrame) -> None:
+        df = valid_features_df.copy()
+        df.loc[0, "sex"] = "Otro"
+        with pytest.raises(DataValidationError):
+            validate_features(df)
+
+    def test_categoria_invalida_en_thal_falla(self, valid_features_df: pd.DataFrame) -> None:
+        df = valid_features_df.copy()
+        df.loc[0, "thal"] = "desconocido"
+        with pytest.raises(DataValidationError):
+            validate_features(df)
+
+    def test_valor_fuera_de_slope_valido_falla(self, valid_features_df: pd.DataFrame) -> None:
+        df = valid_features_df.copy()
+        df.loc[0, "slope"] = 5.0
+        with pytest.raises(DataValidationError):
+            validate_features(df)
+
+
+class TestValidateFeaturesTarget:
+    def test_target_nulo_falla(self, valid_features_df: pd.DataFrame) -> None:
+        df = valid_features_df.copy()
+        df.loc[0, "disease"] = None
+        with pytest.raises(DataValidationError):
+            validate_features(df)
+
+    def test_target_fuera_de_0_1_falla(self, valid_features_df: pd.DataFrame) -> None:
+        df = valid_features_df.copy()
+        df.loc[0, "disease"] = 2
+        with pytest.raises(DataValidationError):
+            validate_features(df)
+
+
+class TestValidateFeaturesIntegridad:
+    def test_filas_duplicadas_fallan(self, valid_features_df: pd.DataFrame) -> None:
+        df = pd.concat([valid_features_df, valid_features_df.iloc[[0]]], ignore_index=True)
+        with pytest.raises(DataValidationError):
+            validate_features(df)
+
+    def test_max_hr_incoherente_con_edad_falla(self, valid_features_df: pd.DataFrame) -> None:
+        df = valid_features_df.copy()
+        # Paciente de 80 años con frecuencia cardíaca máxima de 210 -> fisiológicamente inválido
+        df.loc[0, "age"] = 80.0
+        df.loc[0, "max_hr"] = 210.0
+        with pytest.raises(DataValidationError):
+            validate_features(df)
+
+
+class TestValidateFeaturesExcesoDeNulos:
+    def test_exceso_de_nulos_en_columna_falla(self, valid_features_df: pd.DataFrame) -> None:
+        df = valid_features_df.copy()
+        # Más del 10% (MAX_NULL_FRACTION) de nulos en chol
+        df.loc[0:2, "chol"] = None
+        with pytest.raises(DataValidationError):
+            validate_features(df)
+
+
+# ------------------------------------------------------------------
+# Integración: no debe persistir features si la validación falla
+# ------------------------------------------------------------------
+class TestRunPipelineNoPersisteSiFalla:
+    def test_no_guarda_archivo_si_validacion_falla(self, tmp_path: Path) -> None:
+        df_invalido = pd.DataFrame(
+            {
+                "age": [63],
+                "sex": ["categoria_invalida"],  # provoca fallo de validación
+                "chest_pain": ["typical"],
+                "rest_bp": [145],
+                "chol": [233],
+                "fbs": [1],
+                "rest_ecg": ["normal"],
+                "max_hr": [150],
+                "exang": [0],
+                "old_peak": [2.3],
+                "slope": ["1"],
+                "ca": ["0"],
+                "thal": ["fixed"],
+                "disease": [1],
+            }
+        )
+        input_path = tmp_path / "input.csv"
+        output_path = tmp_path / "output.parquet"
+        df_invalido.to_csv(input_path, index=False)
+
+        with pytest.raises(DataValidationError):
+            run_pipeline(input_path, output_path)
+
+        assert not output_path.exists()
+
+    def test_guarda_archivo_si_validacion_pasa(
+        self, tmp_path: Path, valid_features_df: pd.DataFrame
+    ) -> None:
+        input_path = tmp_path / "input.csv"
+        output_path = tmp_path / "output.parquet"
+        valid_features_df.to_csv(input_path, index=False)
+
+        run_pipeline(input_path, output_path)
+
+        assert output_path.exists()
