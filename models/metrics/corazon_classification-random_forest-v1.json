@@ -14,5 +14,109 @@
     ]
   ],
   "n_test_samples": 30,
-  "roc_auc": 0.8981481481481481
+  "roc_auc": 0.8981481481481481,
+  "train_metrics": {
+    "accuracy": 1.0,
+    "precision": 1.0,
+    "recall": 1.0,
+    "f1": 1.0,
+    "confusion_matrix": [
+      [
+        71,
+        0
+      ],
+      [
+        0,
+        46
+      ]
+    ],
+    "n_test_samples": 117,
+    "roc_auc": 1.0
+  },
+  "cross_validation": {
+    "accuracy": {
+      "mean": 0.743478260869565,
+      "std": 0.005324977701702585,
+      "scores": [
+        0.75,
+        0.75,
+        0.7391304347826086,
+        0.7391304347826086,
+        0.7391304347826086
+      ]
+    },
+    "precision": {
+      "mean": 0.7023809523809523,
+      "std": 0.03194382824999702,
+      "scores": [
+        0.7142857142857143,
+        0.75,
+        0.7142857142857143,
+        0.6666666666666666,
+        0.6666666666666666
+      ]
+    },
+    "recall": {
+      "mean": 0.6088888888888888,
+      "std": 0.04988876515698586,
+      "scores": [
+        0.5555555555555556,
+        0.6,
+        0.5555555555555556,
+        0.6666666666666666,
+        0.6666666666666666
+      ]
+    },
+    "f1": {
+      "mean": 0.6499999999999999,
+      "std": 0.020412414523193135,
+      "scores": [
+        0.625,
+        0.6666666666666666,
+        0.625,
+        0.6666666666666666,
+        0.6666666666666666
+      ]
+    }
+  },
+  "train_cv_test_comparison": {
+    "accuracy": {
+      "train": 1.0,
+      "cv_mean": 0.743478260869565,
+      "cv_std": 0.005324977701702585,
+      "test": 0.8333333333333334
+    },
+    "precision": {
+      "train": 1.0,
+      "cv_mean": 0.7023809523809523,
+      "cv_std": 0.03194382824999702,
+      "test": 0.8181818181818182
+    },
+    "recall": {
+      "train": 1.0,
+      "cv_mean": 0.6088888888888888,
+      "cv_std": 0.04988876515698586,
+      "test": 0.75
+    },
+    "f1": {
+      "train": 1.0,
+      "cv_mean": 0.6499999999999999,
+      "cv_std": 0.020412414523193135,
+      "test": 0.782608695652174
+    }
+  },
+  "generalization_analysis": {
+    "status": "overfitting",
+    "primary_metric": "recall",
+    "train_score": 1.0,
+    "cv_mean_score": 0.6088888888888888,
+    "test_score": 0.75,
+    "gap_train_cv": 0.3911111111111112,
+    "gap_train_test": 0.25,
+    "recommendations": [
+      "El modelo generaliza peor de lo esperado: considerar reducir la complejidad (menor max_depth, más regularización).",
+      "Evaluar conseguir más datos de entrenamiento, si es posible.",
+      "Revisar si el conjunto de train tiene distribución muy distinta a CV/test (ver validate_train_test_split)."
+    ]
+  }
 }
