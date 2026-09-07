@@ -19,11 +19,13 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import sys
 from pathlib import Path
 from typing import Any
 
 import pandas as pd
 from joblib import dump
+from scipy import stats
 from sklearn.compose import ColumnTransformer
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.impute import SimpleImputer
@@ -65,6 +67,11 @@ RANDOM_STATE = 42
 # Falsos Negativos en el diagnóstico de enfermedad cardíaca.
 PRIMARY_METRIC = "recall"
 
+# Umbrales para la validación de la separación train/test.
+MIN_TEST_TRAIN_RATIO = 0.05  # el test no debe ser menos del 5% del tamaño del train
+MAX_LABEL_PROPORTION_DIFF = 0.15  # diferencia máxima tolerada en proporción de clases
+NUMERIC_DRIFT_PVALUE_THRESHOLD = 0.01  # p-valor del test KS por debajo del cual se reporta drift
+
 DEFAULT_INPUT_PATH = Path("data/02_intermediate/corazon_type_fixed.parquet")
 DEFAULT_MODEL_OUTPUT_PATH = Path("models/corazon_classification-random_forest-v1.joblib")
 DEFAULT_METRICS_OUTPUT_PATH = Path("models/metrics/corazon_classification-random_forest-v1.json")
@@ -73,6 +80,10 @@ DEFAULT_METRICS_OUTPUT_PATH = Path("models/metrics/corazon_classification-random
 # ------------------------------------------------------------------
 # Carga de datos
 # ------------------------------------------------------------------
+class TrainTestValidationError(Exception):
+    """Se lanza cuando se detecta fuga de información (data leakage) entre train y test."""
+
+
 def load_features(input_path: Path, target: str = TARGET) -> pd.DataFrame:
     """Lee las features procesadas desde un archivo Parquet.
 
@@ -125,6 +136,182 @@ def split_train_test(
     )
     logger.info("Train: %s filas | Test: %s filas", len(x_train), len(x_test))
     return x_train, x_test, y_train, y_test
+
+
+# ------------------------------------------------------------------
+# Validación de la separación train/test
+# ------------------------------------------------------------------
+def _check_index_leakage(x_train: pd.DataFrame, x_test: pd.DataFrame) -> list[str]:
+    """Verifica que no haya índices compartidos entre train y test (fuga de datos)."""
+    indices_comunes = set(x_train.index) & set(x_test.index)
+    if indices_comunes:
+        return [f"Fuga de índices: {len(indices_comunes)} índice(s) presentes en train y test"]
+    return []
+
+
+def _check_duplicate_rows_leakage(x_train: pd.DataFrame, x_test: pd.DataFrame) -> list[str]:
+    """Verifica que no existan filas idénticas (mismos valores) presentes en ambos conjuntos."""
+    filas_en_ambos = pd.merge(
+        x_test.reset_index(drop=True), x_train.reset_index(drop=True), how="inner"
+    )
+    if len(filas_en_ambos) > 0:
+        return [
+            (
+                f"Fuga de datos: {len(filas_en_ambos)} fila(s) de test tienen valores "
+                "idénticos a filas de train"
+            )
+        ]
+    return []
+
+
+def _check_size_ratio(x_train: pd.DataFrame, x_test: pd.DataFrame) -> list[str]:
+    """Verifica que el tamaño relativo de test respecto a train sea razonable."""
+    if len(x_train) == 0:
+        return ["El conjunto de train está vacío"]
+    ratio = len(x_test) / len(x_train)
+    if ratio < MIN_TEST_TRAIN_RATIO:
+        return [
+            (
+                f"El conjunto de test es muy pequeño respecto a train "
+                f"(ratio={ratio:.3f}, mínimo esperado={MIN_TEST_TRAIN_RATIO})"
+            )
+        ]
+    return []
+
+
+def _check_label_distribution(y_train: pd.Series, y_test: pd.Series) -> list[str]:
+    """Verifica que la distribución de clases del target sea similar entre train y test."""
+    warnings_list = []
+    prop_train = y_train.value_counts(normalize=True)
+    prop_test = y_test.value_counts(normalize=True)
+
+    for clase in set(prop_train.index) | set(prop_test.index):
+        p_train = prop_train.get(clase, 0.0)
+        p_test = prop_test.get(clase, 0.0)
+        diff = abs(p_train - p_test)
+        if diff > MAX_LABEL_PROPORTION_DIFF:
+            warnings_list.append(
+                f"Distribución del target difiere para la clase '{clase}': "
+                f"train={p_train:.2%}, test={p_test:.2%} (diferencia={diff:.2%})"
+            )
+    return warnings_list
+
+
+def _check_new_categories(
+    x_train: pd.DataFrame, x_test: pd.DataFrame, categorical_columns: list[str]
+) -> list[str]:
+    """Verifica si test contiene categorías no vistas en train, para columnas categóricas."""
+    warnings_list = []
+    for col in categorical_columns:
+        if col not in x_train.columns or col not in x_test.columns:
+            continue
+        categorias_train = set(x_train[col].dropna().unique())
+        categorias_test = set(x_test[col].dropna().unique())
+        categorias_nuevas = categorias_test - categorias_train
+        if categorias_nuevas:
+            warnings_list.append(
+                f"Columna '{col}': categorías presentes en test pero no en train: "
+                f"{sorted(str(c) for c in categorias_nuevas)}"
+            )
+    return warnings_list
+
+
+def _check_numeric_drift(
+    x_train: pd.DataFrame, x_test: pd.DataFrame, numeric_columns: list[str]
+) -> list[str]:
+    """Verifica drift entre train y test en columnas numéricas usando el test de Kolmogorov-Smirnov."""
+    warnings_list = []
+    for col in numeric_columns:
+        if col not in x_train.columns or col not in x_test.columns:
+            continue
+        train_vals = x_train[col].dropna()
+        test_vals = x_test[col].dropna()
+        min_samples_ks_test = 2
+        if len(train_vals) < min_samples_ks_test or len(test_vals) < min_samples_ks_test:
+            continue
+
+        statistic, p_value = stats.ks_2samp(train_vals, test_vals)
+        if p_value < NUMERIC_DRIFT_PVALUE_THRESHOLD:
+            warnings_list.append(
+                f"Columna '{col}': posible drift entre train y test "
+                f"(KS statistic={statistic:.3f}, p-value={p_value:.4f})"
+            )
+    return warnings_list
+
+
+def validate_train_test_split(  # noqa: PLR0913, PLR0917
+    x_train: pd.DataFrame,
+    x_test: pd.DataFrame,
+    y_train: pd.Series,
+    y_test: pd.Series,
+    numeric_columns: list[str] = NUMERIC_COLUMNS,
+    categorical_columns: list[str] = CATEGORICAL_COLUMNS,
+) -> dict[str, Any]:
+    """Valida la separación train/test: evita fuga de información y verifica representatividad.
+
+    Ejecuta los siguientes checks:
+        - Fuga de índices entre train y test (crítico -> error).
+        - Fuga por filas duplicadas con valores idénticos entre train y test (crítico -> error).
+        - Tamaño relativo de test respecto a train (advertencia).
+        - Distribución del target (label) similar entre train y test (advertencia).
+        - Categorías nuevas en test no vistas en train (advertencia).
+        - Drift de variables numéricas entre train y test, vía test de Kolmogorov-Smirnov
+          (advertencia).
+
+    Args:
+        x_train: features de entrenamiento.
+        x_test: features de prueba.
+        y_train: target de entrenamiento.
+        y_test: target de prueba.
+        numeric_columns: columnas numéricas a evaluar por drift.
+        categorical_columns: columnas categóricas a evaluar por categorías nuevas.
+
+    Returns:
+        Diccionario con:
+            - "passed": True si no hubo fuga de datos (independiente de las advertencias).
+            - "leakage_detected": True si se detectó fuga de datos (índices o filas duplicadas).
+            - "errors": lista de mensajes de error crítico (fuga de datos).
+            - "warnings": lista de mensajes de advertencia (no crítico).
+
+    Raises:
+        TrainTestValidationError: si se detecta fuga de información (data leakage) entre
+            train y test. En ese caso, el pipeline NO debe continuar con el entrenamiento.
+    """
+    errores = _check_index_leakage(x_train, x_test) + _check_duplicate_rows_leakage(x_train, x_test)
+
+    advertencias = (
+        _check_size_ratio(x_train, x_test)
+        + _check_label_distribution(y_train, y_test)
+        + _check_new_categories(x_train, x_test, categorical_columns)
+        + _check_numeric_drift(x_train, x_test, numeric_columns)
+    )
+
+    for advertencia in advertencias:
+        logger.warning("Validación train/test: %s", advertencia)
+
+    if errores:
+        for error in errores:
+            logger.error("Validación train/test: %s", error)
+        mensaje = (
+            f"Se detectó fuga de información (data leakage) entre train y test: "
+            f"{'; '.join(errores)}"
+        )
+        raise TrainTestValidationError(mensaje)
+
+    if not advertencias:
+        logger.info("Validación train/test EXITOSA: sin fugas de datos ni advertencias")
+    else:
+        logger.info(
+            "Validación train/test completada sin fuga de datos, con %s advertencia(s)",
+            len(advertencias),
+        )
+
+    return {
+        "passed": True,
+        "leakage_detected": False,
+        "errors": errores,
+        "warnings": advertencias,
+    }
 
 
 # ------------------------------------------------------------------
@@ -302,6 +489,8 @@ def run_pipeline(  # noqa: PLR0913, PLR0917
         df, test_size=test_size, random_state=random_state
     )
 
+    validate_train_test_split(x_train, x_test, y_train, y_test)
+
     pipeline = train_model(x_train, y_train, model_params=model_params)
     metrics = evaluate_model(pipeline, x_test, y_test)
 
@@ -358,12 +547,16 @@ def main() -> None:
         level=args.log_level,
         format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
     )
-    run_pipeline(
-        input_path=args.input,
-        model_output_path=args.model_output,
-        metrics_output_path=args.metrics_output,
-        test_size=args.test_size,
-    )
+    try:
+        run_pipeline(
+            input_path=args.input,
+            model_output_path=args.model_output,
+            metrics_output_path=args.metrics_output,
+            test_size=args.test_size,
+        )
+    except TrainTestValidationError:
+        logger.exception("Pipeline detenido")
+        sys.exit(1)
 
 
 if __name__ == "__main__":

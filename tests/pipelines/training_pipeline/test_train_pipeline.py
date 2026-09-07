@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import cast
 
 import numpy as np
 import pandas as pd
@@ -12,6 +13,7 @@ from joblib import load
 from sklearn.pipeline import Pipeline
 
 from pipelines.training_pipeline.train_pipeline import (
+    TrainTestValidationError,
     build_model,
     build_preprocessor,
     evaluate_model,
@@ -21,6 +23,7 @@ from pipelines.training_pipeline.train_pipeline import (
     save_model,
     split_train_test,
     train_model,
+    validate_train_test_split,
 )
 
 
@@ -288,3 +291,129 @@ class TestRunPipeline:
         x_sample = features_df.drop(columns=["disease"]).head(3)
         preds = modelo.predict(x_sample)
         assert len(preds) == 3  # noqa: PLR2004
+
+
+# ------------------------------------------------------------------
+# Validación de la separación train/test (validate_train_test_split)
+# ------------------------------------------------------------------
+@pytest.fixture
+def split_valido(
+    features_df: pd.DataFrame,
+) -> tuple[pd.DataFrame, pd.DataFrame, pd.Series, pd.Series]:
+    """Split train/test estándar, sin problemas, para usar como base en los tests de validación."""
+    return cast(
+        "tuple[pd.DataFrame, pd.DataFrame, pd.Series, pd.Series]",
+        split_train_test(features_df, test_size=0.2, random_state=42),
+    )
+
+
+class TestValidateTrainTestSplitCasosValidos:
+    def test_split_valido_no_lanza_error(
+        self, split_valido: tuple[pd.DataFrame, pd.DataFrame, pd.Series, pd.Series]
+    ) -> None:
+        x_train, x_test, y_train, y_test = split_valido
+        resultado = validate_train_test_split(x_train, x_test, y_train, y_test)
+        assert resultado["passed"] is True
+        assert resultado["leakage_detected"] is False
+
+    def test_split_valido_sin_errores(
+        self, split_valido: tuple[pd.DataFrame, pd.DataFrame, pd.Series, pd.Series]
+    ) -> None:
+        x_train, x_test, y_train, y_test = split_valido
+        resultado = validate_train_test_split(x_train, x_test, y_train, y_test)
+        assert resultado["errors"] == []
+
+
+class TestValidateTrainTestSplitLeakage:
+    def test_indices_compartidos_lanza_error(
+        self, split_valido: tuple[pd.DataFrame, pd.DataFrame, pd.Series, pd.Series]
+    ) -> None:
+        x_train, x_test, y_train, y_test = split_valido
+        x_test_leak = x_test.copy()
+        x_test_leak.index = list(x_train.index[: len(x_test_leak)])
+
+        with pytest.raises(TrainTestValidationError):
+            validate_train_test_split(x_train, x_test_leak, y_train, y_test)
+
+    def test_filas_duplicadas_entre_conjuntos_lanza_error(
+        self, split_valido: tuple[pd.DataFrame, pd.DataFrame, pd.Series, pd.Series]
+    ) -> None:
+        x_train, x_test, y_train, y_test = split_valido
+        x_test_dup = pd.concat(
+            [x_train.iloc[[0]].reset_index(drop=True), x_test.iloc[1:].reset_index(drop=True)],
+            ignore_index=True,
+        )
+        y_test_dup = pd.concat(
+            [y_train.iloc[[0]].reset_index(drop=True), y_test.iloc[1:].reset_index(drop=True)],
+            ignore_index=True,
+        )
+
+        with pytest.raises(TrainTestValidationError):
+            validate_train_test_split(x_train, x_test_dup, y_train, y_test_dup)
+
+    def test_mensaje_de_error_es_claro(
+        self, split_valido: tuple[pd.DataFrame, pd.DataFrame, pd.Series, pd.Series]
+    ) -> None:
+        x_train, x_test, y_train, y_test = split_valido
+        x_test_leak = x_test.copy()
+        x_test_leak.index = list(x_train.index[: len(x_test_leak)])
+
+        with pytest.raises(TrainTestValidationError, match="fuga de información"):
+            validate_train_test_split(x_train, x_test_leak, y_train, y_test)
+
+
+class TestValidateTrainTestSplitAdvertencias:
+    def test_categoria_nueva_en_test_genera_advertencia_no_error(
+        self, split_valido: tuple[pd.DataFrame, pd.DataFrame, pd.Series, pd.Series]
+    ) -> None:
+        x_train, x_test, y_train, y_test = split_valido
+        x_test_nueva_cat = x_test.copy()
+        x_test_nueva_cat.loc[x_test_nueva_cat.index[0], "thal"] = "categoria_nunca_vista"
+
+        resultado = validate_train_test_split(x_train, x_test_nueva_cat, y_train, y_test)
+
+        assert resultado["passed"] is True
+        assert any("thal" in w for w in resultado["warnings"])
+
+    def test_drift_numerico_fuerte_genera_advertencia_no_error(
+        self, split_valido: tuple[pd.DataFrame, pd.DataFrame, pd.Series, pd.Series]
+    ) -> None:
+        x_train, x_test, y_train, y_test = split_valido
+        x_test_drift = x_test.copy()
+        x_test_drift["chol"] = x_test_drift["chol"] + 1000
+
+        resultado = validate_train_test_split(x_train, x_test_drift, y_train, y_test)
+
+        assert resultado["passed"] is True
+        assert any("chol" in w for w in resultado["warnings"])
+
+    def test_test_muy_pequeno_genera_advertencia(self, features_df: pd.DataFrame) -> None:
+        x_train, x_test, y_train, y_test = split_train_test(
+            features_df, test_size=0.02, random_state=42
+        )
+        resultado = validate_train_test_split(x_train, x_test, y_train, y_test)
+        assert any("pequeño" in w for w in resultado["warnings"])
+
+
+class TestRunPipelineDetieneSiHayLeakage:
+    def test_run_pipeline_no_entrena_si_hay_leakage(
+        self, tmp_path: Path, features_df: pd.DataFrame
+    ) -> None:
+        # Duplicar el dataframe completo fuerza filas idénticas entre train y test
+        df_con_duplicados = pd.concat([features_df, features_df], ignore_index=True)
+
+        input_path = tmp_path / "features.parquet"
+        model_output_path = tmp_path / "modelo.joblib"
+        metrics_output_path = tmp_path / "metrics.json"
+        df_con_duplicados.to_parquet(input_path)
+
+        with pytest.raises(TrainTestValidationError):
+            run_pipeline(
+                input_path=input_path,
+                model_output_path=model_output_path,
+                metrics_output_path=metrics_output_path,
+                model_params={"n_estimators": 10, "random_state": 42},
+            )
+
+        assert not model_output_path.exists()
+        assert not metrics_output_path.exists()
