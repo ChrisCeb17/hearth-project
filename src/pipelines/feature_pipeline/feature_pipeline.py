@@ -46,6 +46,9 @@ VALID_SLOPE = [1.0, 2.0, 3.0]
 VALID_CA = [0.0, 1.0, 2.0, 3.0]
 VALID_BOOLEAN = [0.0, 1.0]
 
+# Columnas numéricas continuas que deben poder convertirse a float.
+NUMERIC_CONTINUOUS_COLUMNS = ["age", "rest_bp", "chol", "max_hr", "old_peak"]
+
 DEFAULT_INPUT_PATH = Path("data/01_raw/corazon.csv")
 DEFAULT_OUTPUT_PATH = Path("data/02_intermediate/corazon_type_fixed.parquet")
 
@@ -179,6 +182,39 @@ def clean_ca(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
+def clean_numeric_columns(
+    df: pd.DataFrame, columns: list[str] = NUMERIC_CONTINUOUS_COLUMNS
+) -> pd.DataFrame:
+    """Convierte columnas numéricas continuas a float y elimina filas no convertibles.
+
+    Args:
+        df: DataFrame de entrada.
+        columns: columnas numéricas continuas a limpiar.
+
+    Returns:
+        DataFrame sin filas con valores no numéricos (ej. texto corrupto) en `columns`.
+    """
+    df = df.copy()
+    for col in columns:
+        if col not in df.columns:
+            logger.warning("Columna '%s' no encontrada en el dataset, se omite", col)
+            continue
+
+        valores_originales = df[col]
+        valores_convertidos = pd.to_numeric(valores_originales, errors="coerce")
+        mask_invalido = valores_convertidos.isna() & valores_originales.notna()
+        n_invalidos = mask_invalido.sum()
+        if n_invalidos > 0:
+            logger.info(
+                "Columna '%s': %s filas con valores no numéricos eliminadas", col, n_invalidos
+            )
+
+        df[col] = valores_convertidos
+        df = df[~mask_invalido]
+
+    return df
+
+
 def clean_boolean_columns(df: pd.DataFrame, columns: list[str] | None = None) -> pd.DataFrame:
     """Convierte columnas booleanas (0/1) y elimina valores inválidos.
 
@@ -227,6 +263,7 @@ def build_features(df: pd.DataFrame) -> pd.DataFrame:
 
     df = clean_target(df)
     df = clean_categorical_columns(df)
+    df = clean_numeric_columns(df)
     df = clean_slope(df)
     df = clean_ca(df)
     df = clean_boolean_columns(df)

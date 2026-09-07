@@ -13,6 +13,7 @@ from pipelines.feature_pipeline.feature_pipeline import (
     clean_boolean_columns,
     clean_ca,
     clean_categorical_columns,
+    clean_numeric_columns,
     clean_slope,
     clean_target,
     load_raw_data,
@@ -27,7 +28,7 @@ def raw_df() -> pd.DataFrame:
     """DataFrame de ejemplo que imita el dataset corazon.csv, incluyendo ruido."""
     return pd.DataFrame(
         {
-            "age": [63, 45, 52, 41, 60],
+            "age": [63, 45, 52, "no_numero", 60],
             "sex": ["Male", "Female", "Male", "Female", "invalido"],
             "chest_pain": ["typical", "asymptomatic", "nonanginal", "nontypical", "typical"],
             "rest_bp": [145, 130, 120, 110, 140],
@@ -94,7 +95,7 @@ class TestCleanTarget:
     def test_conserva_filas_validas(self) -> None:
         df = pd.DataFrame({"disease": [0, 1, 0, 1]})
         result = clean_target(df)
-        assert len(result) == 4
+        assert len(result) == 4  # noqa: PLR2004
 
 
 class TestCleanCategoricalColumns:
@@ -114,7 +115,7 @@ class TestCleanCategoricalColumns:
     def test_columna_faltante_no_rompe(self) -> None:
         df = pd.DataFrame({"otra_columna": [1, 2, 3]})
         result = clean_categorical_columns(df)
-        assert len(result) == 3
+        assert len(result) == 3  # noqa: PLR2004
 
 
 class TestCleanSlope:
@@ -125,19 +126,40 @@ class TestCleanSlope:
     def test_valores_validos_se_conservan(self) -> None:
         df = pd.DataFrame({"slope": ["1", "2", "3"]})
         result = clean_slope(df)
-        assert len(result) == 3
+        assert len(result) == 3  # noqa: PLR2004
         assert set(result["slope"].unique()) == {1.0, 2.0, 3.0}
 
 
 class TestCleanCa:
     def test_elimina_valores_fuera_de_rango(self, raw_df: pd.DataFrame) -> None:
         result = clean_ca(raw_df)
-        assert 5.0 not in result["ca"].values
+        assert 5.0 not in result["ca"].values  # noqa: PLR2004
 
     def test_valores_validos_se_conservan(self) -> None:
         df = pd.DataFrame({"ca": ["0", "1", "2", "3"]})
         result = clean_ca(df)
-        assert len(result) == 4
+        assert len(result) == 4  # noqa: PLR2004
+
+
+class TestCleanNumericColumns:
+    def test_elimina_valores_no_numericos(self, raw_df: pd.DataFrame) -> None:
+        result = clean_numeric_columns(raw_df)
+        assert "no_numero" not in result["age"].astype(str).values
+
+    def test_convierte_a_float(self, raw_df: pd.DataFrame) -> None:
+        result = clean_numeric_columns(raw_df)
+        assert result["age"].dtype == float
+
+    def test_valores_validos_se_conservan(self) -> None:
+        df = pd.DataFrame({"age": ["63", "45", "52"]})
+        result = clean_numeric_columns(df, columns=["age"])
+        assert len(result) == 3  # noqa: PLR2004
+        assert result["age"].tolist() == [63.0, 45.0, 52.0]
+
+    def test_columna_faltante_no_rompe(self) -> None:
+        df = pd.DataFrame({"otra_columna": [1, 2, 3]})
+        result = clean_numeric_columns(df, columns=["age"])
+        assert len(result) == 3  # noqa: PLR2004
 
 
 class TestCleanBooleanColumns:
@@ -148,7 +170,7 @@ class TestCleanBooleanColumns:
     def test_valores_validos_se_conservan(self) -> None:
         df = pd.DataFrame({"fbs": [0, 1, "0", "1"]})
         result = clean_boolean_columns(df, columns=["fbs"])
-        assert len(result) == 4
+        assert len(result) == 4  # noqa: PLR2004
         assert set(result["fbs"].unique()) == {0.0, 1.0}
 
 
@@ -188,7 +210,7 @@ class TestLoadRawData:
         result = load_raw_data(csv_path)
 
         assert list(result.columns) == ["a", "b"]
-        assert len(result) == 2
+        assert len(result) == 2  # noqa: PLR2004
 
     def test_archivo_inexistente_lanza_error(self, tmp_path: Path) -> None:
         with pytest.raises(FileNotFoundError):
