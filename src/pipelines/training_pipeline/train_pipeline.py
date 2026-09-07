@@ -23,6 +23,10 @@ import sys
 from pathlib import Path
 from typing import Any
 
+import matplotlib
+
+matplotlib.use("Agg")  # backend no interactivo, para guardar figuras sin display
+import matplotlib.pyplot as plt
 import pandas as pd
 from joblib import dump
 from scipy import stats
@@ -37,7 +41,7 @@ from sklearn.metrics import (
     recall_score,
     roc_auc_score,
 )
-from sklearn.model_selection import train_test_split
+from sklearn.model_selection import StratifiedKFold, cross_validate, train_test_split
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import OneHotEncoder, StandardScaler
 
@@ -71,6 +75,14 @@ PRIMARY_METRIC = "recall"
 MIN_TEST_TRAIN_RATIO = 0.05  # el test no debe ser menos del 5% del tamaño del train
 MAX_LABEL_PROPORTION_DIFF = 0.15  # diferencia máxima tolerada en proporción de clases
 NUMERIC_DRIFT_PVALUE_THRESHOLD = 0.01  # p-valor del test KS por debajo del cual se reporta drift
+
+# Configuración de validación cruzada y análisis de generalización del modelo.
+CV_FOLDS = 5
+CV_SCORING = ["accuracy", "precision", "recall", "f1"]
+# Diferencia máxima tolerada entre score de train y de CV/test antes de sospechar overfitting.
+OVERFIT_GAP_THRESHOLD = 0.15
+# Score mínimo (train y CV) por debajo del cual se sospecha underfitting.
+UNDERFIT_SCORE_THRESHOLD = 0.60
 
 DEFAULT_INPUT_PATH = Path("data/02_intermediate/corazon_type_fixed.parquet")
 DEFAULT_MODEL_OUTPUT_PATH = Path("models/corazon_classification-random_forest-v1.joblib")
@@ -433,6 +445,241 @@ def evaluate_model(pipeline: Pipeline, x_test: pd.DataFrame, y_test: pd.Series) 
 
 
 # ------------------------------------------------------------------
+# Validación robusta del modelo: cross-validation, comparación y diagnóstico
+# ------------------------------------------------------------------
+def get_cv_splitter(n_splits: int = CV_FOLDS) -> StratifiedKFold:
+    """Devuelve el splitter de validación cruzada apropiado para este problema.
+
+    Se usa `StratifiedKFold` (no `KFold` ni `TimeSeriesSplit`) porque:
+        - Es un problema de clasificación binaria con clases moderadamente balanceadas
+          (no perfectamente 50/50), por lo que estratificar mantiene la proporción de
+          clases en cada fold, evitando folds con distribuciones sesgadas.
+        - No hay una dimensión temporal en los datos (no es una serie de tiempo), por lo
+          que `TimeSeriesSplit` no aplica.
+
+    Args:
+        n_splits: número de particiones de la validación cruzada.
+
+    Returns:
+        Instancia de `StratifiedKFold` configurada con semilla fija para reproducibilidad.
+    """
+    return StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=RANDOM_STATE)
+
+
+def cross_validate_model(
+    x_train: pd.DataFrame,
+    y_train: pd.Series,
+    model_params: dict[str, Any] = MODEL_PARAMS,
+    cv_folds: int = CV_FOLDS,
+    scoring: list[str] = CV_SCORING,
+) -> dict[str, Any]:
+    """Ejecuta validación cruzada sobre el set de entrenamiento con múltiples métricas.
+
+    Construye un pipeline SIN ajustar (mismo preprocesador + mismos hiperparámetros que
+    `train_model`) y lo evalúa con `cross_validate`, que ajusta y evalúa un modelo nuevo
+    en cada fold — evitando cualquier fuga entre folds.
+
+    Args:
+        x_train: features de entrenamiento (no se usa test, para no filtrar información).
+        y_train: target de entrenamiento.
+        model_params: hiperparámetros del modelo a validar.
+        cv_folds: número de folds de la validación cruzada.
+        scoring: lista de métricas a calcular en cada fold.
+
+    Returns:
+        Diccionario `{métrica: {"mean": float, "std": float, "scores": list[float]}}`
+        con los resultados de cada métrica a través de los folds.
+    """
+    preprocessor = build_preprocessor()
+    model = build_model(model_params)
+    pipeline_sin_ajustar = Pipeline(steps=[("preprocessor", preprocessor), ("model", model)])
+
+    splitter = get_cv_splitter(n_splits=cv_folds)
+
+    logger.info("Ejecutando validación cruzada (%s-fold, StratifiedKFold)", cv_folds)
+    resultados_cv = cross_validate(
+        pipeline_sin_ajustar,
+        x_train,
+        y_train,
+        cv=splitter,
+        scoring=scoring,
+        n_jobs=-1,
+    )
+
+    resumen: dict[str, Any] = {}
+    for metrica in scoring:
+        scores = resultados_cv[f"test_{metrica}"]
+        resumen[metrica] = {
+            "mean": float(scores.mean()),
+            "std": float(scores.std()),
+            "scores": [float(s) for s in scores],
+        }
+        logger.info(
+            "CV %s | media=%.4f desviación estándar=%.4f",
+            metrica,
+            resumen[metrica]["mean"],
+            resumen[metrica]["std"],
+        )
+
+    return resumen
+
+
+def compare_train_cv_test(
+    train_metrics: dict[str, Any],
+    cv_metrics: dict[str, Any],
+    test_metrics: dict[str, Any],
+    metrics_to_compare: list[str] = CV_SCORING,
+) -> dict[str, Any]:
+    """Construye una tabla comparativa de métricas entre train, validación cruzada y test.
+
+    Args:
+        train_metrics: salida de `evaluate_model` sobre el set de entrenamiento.
+        cv_metrics: salida de `cross_validate_model`.
+        test_metrics: salida de `evaluate_model` sobre el set de prueba.
+        metrics_to_compare: métricas a incluir en la comparación.
+
+    Returns:
+        Diccionario `{métrica: {"train": float, "cv_mean": float, "cv_std": float,
+        "test": float}}`.
+    """
+    comparacion: dict[str, Any] = {}
+    for metrica in metrics_to_compare:
+        comparacion[metrica] = {
+            "train": train_metrics[metrica],
+            "cv_mean": cv_metrics[metrica]["mean"],
+            "cv_std": cv_metrics[metrica]["std"],
+            "test": test_metrics[metrica],
+        }
+        logger.info(
+            "Comparación %s | train=%.4f | cv=%.4f (+/-%.4f) | test=%.4f",
+            metrica,
+            comparacion[metrica]["train"],
+            comparacion[metrica]["cv_mean"],
+            comparacion[metrica]["cv_std"],
+            comparacion[metrica]["test"],
+        )
+    return comparacion
+
+
+def analyze_generalization(
+    comparison: dict[str, Any],
+    primary_metric: str = PRIMARY_METRIC,
+    overfit_gap_threshold: float = OVERFIT_GAP_THRESHOLD,
+    underfit_score_threshold: float = UNDERFIT_SCORE_THRESHOLD,
+) -> dict[str, Any]:
+    """Diagnostica underfitting/overfitting comparando train, CV y test en la métrica principal.
+
+    Reglas de diagnóstico (sobre `primary_metric`, por defecto Recall):
+        - **Underfitting**: el score de train Y el de CV están ambos por debajo de
+          `underfit_score_threshold` — el modelo ni siquiera ajusta bien los datos que ve.
+        - **Overfitting**: la brecha entre train y CV, o entre train y test, supera
+          `overfit_gap_threshold` — el modelo memoriza train pero no generaliza.
+        - **Buena generalización**: ninguna de las condiciones anteriores se cumple.
+
+    Args:
+        comparison: salida de `compare_train_cv_test`.
+        primary_metric: métrica usada para el diagnóstico (debe existir en `comparison`).
+        overfit_gap_threshold: brecha máxima tolerada antes de sospechar overfitting.
+        underfit_score_threshold: score mínimo esperado antes de sospechar underfitting.
+
+    Returns:
+        Diccionario con `status` ("overfitting", "underfitting" o "buena_generalizacion"),
+        las brechas calculadas, y una lista de `recommendations` (acciones sugeridas).
+    """
+    valores = comparison[primary_metric]
+    train_score = valores["train"]
+    cv_score = valores["cv_mean"]
+    test_score = valores["test"]
+
+    gap_train_cv = train_score - cv_score
+    gap_train_test = train_score - test_score
+
+    recomendaciones: list[str] = []
+
+    if train_score < underfit_score_threshold and cv_score < underfit_score_threshold:
+        status = "underfitting"
+        recomendaciones = [
+            (
+                "El modelo no logra un buen desempeño ni siquiera en entrenamiento: "
+                "considerar un modelo más complejo (más árboles, mayor profundidad)."
+            ),
+            (
+                "Revisar si faltan features relevantes o si el feature engineering "
+                "actual es insuficiente."
+            ),
+            (
+                "Verificar que las variables más predictivas no se hayan perdido en la "
+                "limpieza de datos."
+            ),
+        ]
+    elif gap_train_cv > overfit_gap_threshold or gap_train_test > overfit_gap_threshold:
+        status = "overfitting"
+        recomendaciones = [
+            (
+                "El modelo generaliza peor de lo esperado: considerar reducir la "
+                "complejidad (menor max_depth, más regularización)."
+            ),
+            "Evaluar conseguir más datos de entrenamiento, si es posible.",
+            (
+                "Revisar si el conjunto de train tiene distribución muy distinta a "
+                "CV/test (ver validate_train_test_split)."
+            ),
+        ]
+    else:
+        status = "buena_generalizacion"
+        recomendaciones = [
+            (
+                "El modelo generaliza razonablemente bien entre train, validación "
+                "cruzada y test. Se puede proceder con este modelo como referencia."
+            )
+        ]
+
+    logger.info(
+        "Diagnóstico de generalización (%s): %s | gap train-cv=%.4f | gap train-test=%.4f",
+        primary_metric,
+        status,
+        gap_train_cv,
+        gap_train_test,
+    )
+    for r in recomendaciones:
+        logger.info("Recomendación: %s", r)
+
+    return {
+        "status": status,
+        "primary_metric": primary_metric,
+        "train_score": train_score,
+        "cv_mean_score": cv_score,
+        "test_score": test_score,
+        "gap_train_cv": gap_train_cv,
+        "gap_train_test": gap_train_test,
+        "recommendations": recomendaciones,
+    }
+
+
+def plot_cv_scores(cv_metrics: dict[str, Any], output_path: Path) -> None:
+    """Genera y guarda un boxplot con la distribución de scores de la validación cruzada.
+
+    Args:
+        cv_metrics: salida de `cross_validate_model`.
+        output_path: ruta donde guardar la figura (PNG).
+    """
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    datos = {metrica: valores["scores"] for metrica, valores in cv_metrics.items()}
+    df_scores = pd.DataFrame(datos)
+
+    fig, ax = plt.subplots(figsize=(8, 5))
+    df_scores.plot.box(ax=ax)
+    ax.set_title(f"Distribución de métricas en validación cruzada ({CV_FOLDS}-fold)")
+    ax.set_ylabel("Score")
+    fig.tight_layout()
+    fig.savefig(output_path)
+    plt.close(fig)
+
+    logger.info("Gráfica de validación cruzada guardada en %s", output_path)
+
+
+# ------------------------------------------------------------------
 # Almacenamiento
 # ------------------------------------------------------------------
 def save_model(pipeline: Pipeline, output_path: Path) -> None:
@@ -482,7 +729,9 @@ def run_pipeline(  # noqa: PLR0913, PLR0917
         model_params: hiperparámetros del modelo.
 
     Returns:
-        Diccionario de métricas de evaluación en test.
+        Diccionario con las métricas de test (en el nivel superior, para compatibilidad),
+        más las claves "train_metrics", "cross_validation", "train_cv_test_comparison" y
+        "generalization_analysis" con el detalle completo de la validación del modelo.
     """
     df = load_features(input_path)
     x_train, x_test, y_train, y_test = split_train_test(
@@ -492,12 +741,30 @@ def run_pipeline(  # noqa: PLR0913, PLR0917
     validate_train_test_split(x_train, x_test, y_train, y_test)
 
     pipeline = train_model(x_train, y_train, model_params=model_params)
+
+    # Evaluación en los tres frentes: train (ajuste), CV (estabilidad), test (generalización)
+    train_metrics = evaluate_model(pipeline, x_train, y_train)
+    cv_metrics = cross_validate_model(x_train, y_train, model_params=model_params)
     metrics = evaluate_model(pipeline, x_test, y_test)
 
-    save_model(pipeline, model_output_path)
-    save_metrics(metrics, metrics_output_path)
+    comparison = compare_train_cv_test(train_metrics, cv_metrics, metrics)
+    diagnosis = analyze_generalization(comparison)
 
-    return metrics
+    save_model(pipeline, model_output_path)
+
+    reporte_completo = {
+        **metrics,
+        "train_metrics": train_metrics,
+        "cross_validation": cv_metrics,
+        "train_cv_test_comparison": comparison,
+        "generalization_analysis": diagnosis,
+    }
+    save_metrics(reporte_completo, metrics_output_path)
+
+    cv_plot_path = metrics_output_path.with_name(metrics_output_path.stem + "_cv_boxplot.png")
+    plot_cv_scores(cv_metrics, cv_plot_path)
+
+    return reporte_completo
 
 
 def parse_args() -> argparse.Namespace:

@@ -10,14 +10,20 @@ import numpy as np
 import pandas as pd
 import pytest
 from joblib import load
+from sklearn.model_selection import StratifiedKFold
 from sklearn.pipeline import Pipeline
 
 from pipelines.training_pipeline.train_pipeline import (
     TrainTestValidationError,
+    analyze_generalization,
     build_model,
     build_preprocessor,
+    compare_train_cv_test,
+    cross_validate_model,
     evaluate_model,
+    get_cv_splitter,
     load_features,
+    plot_cv_scores,
     run_pipeline,
     save_metrics,
     save_model,
@@ -417,3 +423,188 @@ class TestRunPipelineDetieneSiHayLeakage:
 
         assert not model_output_path.exists()
         assert not metrics_output_path.exists()
+
+
+# ------------------------------------------------------------------
+# Validación robusta del modelo: cross-validation, comparación, diagnóstico
+# ------------------------------------------------------------------
+class TestGetCvSplitter:
+    def test_devuelve_stratified_kfold(self) -> None:
+        splitter = get_cv_splitter(n_splits=5)
+        assert isinstance(splitter, StratifiedKFold)
+        assert splitter.n_splits == 5  # noqa: PLR2004
+
+    def test_shuffle_activado_para_reproducibilidad(self) -> None:
+        splitter = get_cv_splitter()
+        assert splitter.shuffle is True
+        assert splitter.random_state is not None
+
+
+class TestCrossValidateModel:
+    def test_devuelve_metricas_esperadas(self, features_df: pd.DataFrame) -> None:
+        x_train, _, y_train, _ = split_train_test(features_df)
+        resultado = cross_validate_model(
+            x_train, y_train, model_params={"n_estimators": 10, "random_state": 42}, cv_folds=3
+        )
+
+        for metrica in ["accuracy", "precision", "recall", "f1"]:
+            assert metrica in resultado
+            assert "mean" in resultado[metrica]
+            assert "std" in resultado[metrica]
+            assert "scores" in resultado[metrica]
+
+    def test_numero_de_scores_coincide_con_folds(self, features_df: pd.DataFrame) -> None:
+        x_train, _, y_train, _ = split_train_test(features_df)
+        resultado = cross_validate_model(
+            x_train, y_train, model_params={"n_estimators": 10, "random_state": 42}, cv_folds=4
+        )
+
+        assert len(resultado["accuracy"]["scores"]) == 4  # noqa: PLR2004
+
+    def test_scores_en_rango_valido(self, features_df: pd.DataFrame) -> None:
+        x_train, _, y_train, _ = split_train_test(features_df)
+        resultado = cross_validate_model(
+            x_train, y_train, model_params={"n_estimators": 10, "random_state": 42}, cv_folds=3
+        )
+
+        for metrica, valores in resultado.items():
+            assert 0.0 <= valores["mean"] <= 1.0, f"{metrica} fuera de rango"
+            for score in valores["scores"]:
+                assert 0.0 <= score <= 1.0
+
+
+class TestCompareTrainCvTest:
+    def test_estructura_de_comparacion(self) -> None:
+        train_metrics = {"accuracy": 0.9, "recall": 0.85}
+        cv_metrics = {
+            "accuracy": {"mean": 0.8, "std": 0.05, "scores": [0.75, 0.8, 0.85]},
+            "recall": {"mean": 0.75, "std": 0.03, "scores": [0.72, 0.75, 0.78]},
+        }
+        test_metrics = {"accuracy": 0.82, "recall": 0.77}
+
+        resultado = compare_train_cv_test(
+            train_metrics, cv_metrics, test_metrics, metrics_to_compare=["accuracy", "recall"]
+        )
+
+        assert resultado["accuracy"]["train"] == 0.9  # noqa: PLR2004
+        assert resultado["accuracy"]["cv_mean"] == 0.8  # noqa: PLR2004
+        assert resultado["accuracy"]["cv_std"] == 0.05  # noqa: PLR2004
+        assert resultado["accuracy"]["test"] == 0.82  # noqa: PLR2004
+
+
+class TestAnalyzeGeneralization:
+    def test_detecta_overfitting(self) -> None:
+        comparison = {
+            "recall": {"train": 1.0, "cv_mean": 0.5, "cv_std": 0.1, "test": 0.55},
+        }
+        resultado = analyze_generalization(comparison, primary_metric="recall")
+
+        assert resultado["status"] == "overfitting"
+        assert len(resultado["recommendations"]) > 0
+
+    def test_detecta_underfitting(self) -> None:
+        comparison = {
+            "recall": {"train": 0.4, "cv_mean": 0.38, "cv_std": 0.05, "test": 0.42},
+        }
+        resultado = analyze_generalization(comparison, primary_metric="recall")
+
+        assert resultado["status"] == "underfitting"
+        assert len(resultado["recommendations"]) > 0
+
+    def test_detecta_buena_generalizacion(self) -> None:
+        comparison = {
+            "recall": {"train": 0.82, "cv_mean": 0.80, "cv_std": 0.03, "test": 0.79},
+        }
+        resultado = analyze_generalization(comparison, primary_metric="recall")
+
+        assert resultado["status"] == "buena_generalizacion"
+
+    def test_calcula_brechas_correctamente(self) -> None:
+        comparison = {
+            "recall": {"train": 0.90, "cv_mean": 0.70, "cv_std": 0.05, "test": 0.65},
+        }
+        resultado = analyze_generalization(comparison, primary_metric="recall")
+
+        assert resultado["gap_train_cv"] == pytest.approx(0.20)
+        assert resultado["gap_train_test"] == pytest.approx(0.25)
+
+
+class TestPlotCvScores:
+    def test_genera_archivo_png(self, tmp_path: Path) -> None:
+        cv_metrics = {
+            "accuracy": {"mean": 0.8, "std": 0.05, "scores": [0.75, 0.8, 0.85, 0.78, 0.82]},
+            "recall": {"mean": 0.75, "std": 0.03, "scores": [0.72, 0.75, 0.78, 0.74, 0.76]},
+        }
+        output_path = tmp_path / "cv_plot.png"
+
+        plot_cv_scores(cv_metrics, output_path)
+
+        assert output_path.exists()
+        assert output_path.stat().st_size > 0
+
+    def test_crea_directorios_faltantes(self, tmp_path: Path) -> None:
+        cv_metrics = {"accuracy": {"mean": 0.8, "std": 0.05, "scores": [0.75, 0.8, 0.85]}}
+        output_path = tmp_path / "no_existe" / "cv_plot.png"
+
+        plot_cv_scores(cv_metrics, output_path)
+
+        assert output_path.exists()
+
+
+class TestRunPipelineIncluyeValidacionDeModelo:
+    def test_reporte_incluye_todas_las_secciones(
+        self, tmp_path: Path, features_df: pd.DataFrame
+    ) -> None:
+        input_path = tmp_path / "features.parquet"
+        model_output_path = tmp_path / "modelo.joblib"
+        metrics_output_path = tmp_path / "metrics.json"
+        features_df.to_parquet(input_path)
+
+        reporte = run_pipeline(
+            input_path=input_path,
+            model_output_path=model_output_path,
+            metrics_output_path=metrics_output_path,
+            model_params={"n_estimators": 10, "random_state": 42},
+        )
+
+        assert "train_metrics" in reporte
+        assert "cross_validation" in reporte
+        assert "train_cv_test_comparison" in reporte
+        assert "generalization_analysis" in reporte
+        # Compatibilidad hacia atrás: las métricas de test siguen en el nivel superior
+        assert "recall" in reporte
+
+    def test_genera_grafica_de_cv(self, tmp_path: Path, features_df: pd.DataFrame) -> None:
+        input_path = tmp_path / "features.parquet"
+        model_output_path = tmp_path / "modelo.joblib"
+        metrics_output_path = tmp_path / "metrics.json"
+        features_df.to_parquet(input_path)
+
+        run_pipeline(
+            input_path=input_path,
+            model_output_path=model_output_path,
+            metrics_output_path=metrics_output_path,
+            model_params={"n_estimators": 10, "random_state": 42},
+        )
+
+        cv_plot_path = metrics_output_path.with_name(metrics_output_path.stem + "_cv_boxplot.png")
+        assert cv_plot_path.exists()
+
+    def test_metrics_json_es_deserializable(
+        self, tmp_path: Path, features_df: pd.DataFrame
+    ) -> None:
+        input_path = tmp_path / "features.parquet"
+        model_output_path = tmp_path / "modelo.joblib"
+        metrics_output_path = tmp_path / "metrics.json"
+        features_df.to_parquet(input_path)
+
+        run_pipeline(
+            input_path=input_path,
+            model_output_path=model_output_path,
+            metrics_output_path=metrics_output_path,
+            model_params={"n_estimators": 10, "random_state": 42},
+        )
+
+        with metrics_output_path.open() as f:
+            contenido = json.load(f)
+        assert "generalization_analysis" in contenido
