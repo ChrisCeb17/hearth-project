@@ -150,6 +150,38 @@ def clean_categorical_columns(
 # ------------------------------------------------------------------
 # Limpieza de columnas ordinales/numéricas discretas
 # ------------------------------------------------------------------
+def clean_physiological_outliers(
+    df: pd.DataFrame, tolerance: int = MAX_HR_TOLERANCE
+) -> pd.DataFrame:
+    """Elimina filas donde max_hr supera el límite fisiológico teórico (220 - age + tolerancia).
+
+    Estos casos son valores atípicos (outliers) fisiológicamente imposibles, tratados como
+    ruido a eliminar, siguiendo el mismo criterio que las demás columnas limpiadas.
+
+    Args:
+        df: DataFrame de entrada, debe contener las columnas "age" y "max_hr".
+        tolerance: margen (en lpm) sobre la fórmula teórica 220 - edad.
+
+    Returns:
+        DataFrame sin las filas fisiológicamente inconsistentes.
+    """
+    df = df.copy()
+    if "age" not in df.columns or "max_hr" not in df.columns:
+        return df
+
+    limite = 220 - df["age"] + tolerance
+    mask_invalido = df["max_hr"] > limite
+    n_invalidos = mask_invalido.sum()
+    if n_invalidos > 0:
+        logger.info(
+            "Outliers fisiológicos (max_hr > 220 - age + %s): %s filas eliminadas",
+            tolerance,
+            n_invalidos,
+        )
+
+    return df[~mask_invalido]
+
+
 def clean_slope(df: pd.DataFrame) -> pd.DataFrame:
     """Convierte `slope` a numérico y elimina valores fuera de {1, 2, 3}."""
     df = df.copy()
@@ -264,9 +296,16 @@ def build_features(df: pd.DataFrame) -> pd.DataFrame:
     df = clean_target(df)
     df = clean_categorical_columns(df)
     df = clean_numeric_columns(df)
+    df = clean_physiological_outliers(df)
     df = clean_slope(df)
     df = clean_ca(df)
     df = clean_boolean_columns(df)
+
+    n_antes_nulos = len(df)
+    df = df.dropna().reset_index(drop=True)
+    n_nulos_eliminados = n_antes_nulos - len(df)
+    if n_nulos_eliminados > 0:
+        logger.info("Filas con valores nulos eliminadas: %s", n_nulos_eliminados)
 
     n_antes_duplicados = len(df)
     df = df.drop_duplicates().reset_index(drop=True)
