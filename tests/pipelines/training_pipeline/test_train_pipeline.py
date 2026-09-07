@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import cast
 
 import numpy as np
 import pandas as pd
@@ -306,7 +307,10 @@ def split_valido(
     features_df: pd.DataFrame,
 ) -> tuple[pd.DataFrame, pd.DataFrame, pd.Series, pd.Series]:
     """Split train/test estándar, sin problemas, para usar como base en los tests de validación."""
-    return split_train_test(features_df, test_size=0.2, random_state=42)
+    return cast(
+        "tuple[pd.DataFrame, pd.DataFrame, pd.Series, pd.Series]",
+        split_train_test(features_df, test_size=0.2, random_state=42),
+    )
 
 
 class TestValidateTrainTestSplitCasosValidos:
@@ -428,7 +432,7 @@ class TestGetCvSplitter:
     def test_devuelve_stratified_kfold(self) -> None:
         splitter = get_cv_splitter(n_splits=5)
         assert isinstance(splitter, StratifiedKFold)
-        assert splitter.n_splits == 5
+        assert splitter.n_splits == 5  # noqa: PLR2004
 
     def test_shuffle_activado_para_reproducibilidad(self) -> None:
         splitter = get_cv_splitter()
@@ -455,7 +459,7 @@ class TestCrossValidateModel:
             x_train, y_train, model_params={"n_estimators": 10, "random_state": 42}, cv_folds=4
         )
 
-        assert len(resultado["accuracy"]["scores"]) == 4
+        assert len(resultado["accuracy"]["scores"]) == 4  # noqa: PLR2004
 
     def test_scores_en_rango_valido(self, features_df: pd.DataFrame) -> None:
         x_train, _, y_train, _ = split_train_test(features_df)
@@ -482,10 +486,10 @@ class TestCompareTrainCvTest:
             train_metrics, cv_metrics, test_metrics, metrics_to_compare=["accuracy", "recall"]
         )
 
-        assert resultado["accuracy"]["train"] == 0.9
-        assert resultado["accuracy"]["cv_mean"] == 0.8
-        assert resultado["accuracy"]["cv_std"] == 0.05
-        assert resultado["accuracy"]["test"] == 0.82
+        assert resultado["accuracy"]["train"] == 0.9  # noqa: PLR2004
+        assert resultado["accuracy"]["cv_mean"] == 0.8  # noqa: PLR2004
+        assert resultado["accuracy"]["cv_std"] == 0.05  # noqa: PLR2004
+        assert resultado["accuracy"]["test"] == 0.82  # noqa: PLR2004
 
 
 class TestAnalyzeGeneralization:
