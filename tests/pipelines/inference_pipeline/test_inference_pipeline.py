@@ -40,9 +40,7 @@ def synthetic_training_data() -> pd.DataFrame:
         {
             "age": age,
             "sex": rng.choice(["Male", "Female"], n),
-            "chest_pain": rng.choice(
-                ["typical", "nontypical", "nonanginal", "asymptomatic"], n
-            ),
+            "chest_pain": rng.choice(["typical", "nontypical", "nonanginal", "asymptomatic"], n),
             "rest_bp": rng.integers(100, 180, n).astype(float),
             "chol": rng.integers(150, 350, n).astype(float),
             "fbs": rng.choice([0.0, 1.0], n),
@@ -122,7 +120,9 @@ class TestLoadModel:
 # Carga de datos nuevos
 # ------------------------------------------------------------------
 class TestLoadNewData:
-    def test_lee_csv_correctamente(self, tmp_path: Path, datos_nuevos_validos: pd.DataFrame) -> None:
+    def test_lee_csv_correctamente(
+        self, tmp_path: Path, datos_nuevos_validos: pd.DataFrame
+    ) -> None:
         csv_path = tmp_path / "nuevos.csv"
         datos_nuevos_validos.to_csv(csv_path, index=False)
 
@@ -238,7 +238,7 @@ class TestSavePredictions:
 
         assert output_path.exists()
         resultado = pd.read_csv(output_path)
-        assert len(resultado) == 2
+        assert len(resultado) == 2  # noqa: PLR2004
 
     def test_crea_directorios_faltantes(self, tmp_path: Path) -> None:
         df = pd.DataFrame({"prediction": [1]})
