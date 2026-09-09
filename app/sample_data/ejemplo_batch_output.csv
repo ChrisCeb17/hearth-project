@@ -1,0 +1,9 @@
+age,sex,chest_pain,rest_bp,chol,fbs,rest_ecg,max_hr,exang,old_peak,slope,ca,thal,prediction,prediction_proba
+59.0,Male,nonanginal,150.0,212.0,1.0,normal,157.0,0.0,1.6,1.0,0.0,normal,0,0.1951863362307229
+57.0,Male,nonanginal,150.0,168.0,0.0,normal,174.0,0.0,1.6,1.0,0.0,normal,0,0.057063242548805675
+57.0,Male,asymptomatic,140.0,192.0,0.0,normal,148.0,0.0,0.4,2.0,0.0,fixed,0,0.17387530563945033
+44.0,Female,nonanginal,108.0,141.0,0.0,normal,175.0,0.0,0.6,2.0,0.0,normal,0,0.07697916666666667
+52.0,Male,asymptomatic,128.0,255.0,0.0,normal,161.0,1.0,0.0,1.0,1.0,reversable,1,0.833314239971498
+46.0,Male,nontypical,101.0,197.0,1.0,normal,156.0,0.0,0.0,1.0,0.0,reversable,0,0.05273566068078263
+52.0,Male,asymptomatic,108.0,233.0,1.0,normal,147.0,0.0,0.1,1.0,3.0,reversable,0,0.29690656565656565
+69.0,Female,typical,140.0,239.0,0.0,normal,151.0,0.0,1.8,1.0,2.0,normal,0,0.4689583333333333
