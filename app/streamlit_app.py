@@ -175,8 +175,12 @@ with tab_individual:
                 "Se recomienda evaluación médica adicional."
             )
         else:
-            st.success(f"✅ **Bajo riesgo de enfermedad cardíaca** (probabilidad: {probabilidad:.1%})")
-            st.markdown("El modelo sugiere que este paciente **probablemente no tiene enfermedad cardíaca**.")
+            st.success(
+                f"✅ **Bajo riesgo de enfermedad cardíaca** (probabilidad: {probabilidad:.1%})"
+            )
+            st.markdown(
+                "El modelo sugiere que este paciente **probablemente no tiene enfermedad cardíaca**."
+            )
 
         st.progress(float(probabilidad))
 
@@ -221,7 +225,9 @@ se descartan automáticamente antes de predecir, y se te informa cuántas fueron
     if archivo_subido is not None:
         try:
             df_nuevo = pd.read_csv(archivo_subido)
-            st.write(f"Archivo leído: **{len(df_nuevo)} fila(s)**, **{len(df_nuevo.columns)} columna(s)**.")
+            st.write(
+                f"Archivo leído: **{len(df_nuevo)} fila(s)**, **{len(df_nuevo.columns)} columna(s)**."
+            )
 
             columnas_faltantes = set(REQUIRED_COLUMNS) - set(df_nuevo.columns)
             if columnas_faltantes:
@@ -249,7 +255,9 @@ se descartan automáticamente antes de predecir, y se te informa cuántas fueron
                     col_m2.metric("Con riesgo detectado", n_riesgo)
                     col_m3.metric(
                         "% con riesgo",
-                        f"{n_riesgo / len(df_predicciones) * 100:.1f}%" if len(df_predicciones) else "0%",
+                        f"{n_riesgo / len(df_predicciones) * 100:.1f}%"
+                        if len(df_predicciones)
+                        else "0%",
                     )
 
                     st.divider()
@@ -266,10 +274,12 @@ se descartan automáticamente antes de predecir, y se te informa cuántas fueron
                     )
         except InferenceDataError as exc:
             st.error(f"❌ Error en los datos: {exc}")
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             st.error(f"❌ Ocurrió un error al procesar el archivo: {exc}")
     else:
-        st.info("👆 Sube un archivo CSV para comenzar, o descarga el ejemplo de arriba para probar.")
+        st.info(
+            "👆 Sube un archivo CSV para comenzar, o descarga el ejemplo de arriba para probar."
+        )
 
 st.divider()
 st.caption(
